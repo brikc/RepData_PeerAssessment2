@@ -1,0 +1,314 @@
+---
+title: "Impact of Storms on Population Health and the Economy across the United States"
+author: "Brianne Calandra"
+date: "March 13, 2015"
+output: 
+   html_document:
+       pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+
+---
+
+
+## Synopsis
+
+This report provides an analysis of the NOAA Storm Database to provide insight on which event types are most harmful to population health and have the greatest economic consequences.  Population health impact is measured by number of fatalities and injuries per storm type.  Economic impact is measured by total cost of damages per storm type. Before analyzing the results, we performed several steps to process and clean the data, which are outlined in detail below.  Finally, we calculated the average health impact and average cost of damages per storm type to conclude that Tsunamis are the most harmful to population health while Hurricanes/Typhoons have the greatest economic consequences.
+
+
+
+## Data Processing
+
+We obtain the Storm Database from the NOAA repository.  This file is quite big (47MB) so the code checks to see if the file already exists in the working directly; if not, it downloads the file.
+
+```{r download_data}
+# Check to see if the file already exists in the working directory.
+# If not, download. File is 47MB so download could take some time.
+filename<-"https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+if (!file.exists("StormData.csv.bz2")) {
+    download.file(filename,destfile="StormData.csv.bz2",method="curl")
+}
+```
+
+Next we read in the database file.  This code chunk is cached because reading the data for the first time takes several minutes.
+
+```{r read_data, cache=TRUE}
+# Read the data from the file. Cache because this takes several minutes.
+stormdata <- read.csv(bzfile("StormData.csv.bz2"))
+```
+
+[Documentation on the NOAA site](http://www.ncdc.noaa.gov/stormevents/details.jsp?type=eventtype) tells us that previous to 1955 only tornado events were recorded.  Additionally, previous to 1996 only tornado, thunderstorm wind and hail events were recorded. The objective of this report is to provide a perspective on which storm events are most harmful to people and the economy. Therefore all observations prior to January 1996 have been excluded from the analysis in order to base this analysis on a complete set of event types, as well as to focus the analysis on the most recent observations, which also happen to be the most complete.
+
+```{r filter_dates, message=FALSE}
+# Load lubridate package
+library(lubridate)
+
+# Convert BGN_DATE from a factor to a date format so it can be filtered
+stormdata$BGN_DATE<-mdy_hms(stormdata$BGN_DATE)
+
+# Load dplyr package
+library(dplyr)
+
+# Filter the full dataset for only observations after 01/01/1996 and save as new object "recentstorms"
+recentstorms <- filter(stormdata, BGN_DATE > mdy("01011996"))
+```
+
+### Subsetting data for insight on population health and economy
+
+Next, we want to further distill the dataset for observations that will give us insights on storm type and impact to population health and economy.  [The data preparation document](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf) that is included with assignment provides direction on the fields which are important to answer this question: FATALIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP. Using these variables, we futher filter to get a subset of observations where there is at least one fatality or injury reported or any damage to property or crops greater than zero.
+
+```{r filter_health}
+# Filter for only observations where there is at least one fatality or injury and store as object "impact"
+impact<-(filter(recentstorms,FATALITIES!=0|INJURIES!=0|PROPDMG>0|CROPDMG>0))
+```
+
+### Grouping storm types
+
+Next we explore this data subset to understand the variety in storm type categorizations.  This is done by viewing the unique values in the subset for "EVTYPE" and viewing the length of this unique vector we see there are 222 different storm types.  
+
+```{r view_storm_types}
+length(unique(impact$EVTYPE))
+```
+
+
+After exploring this unique list of storm types, it is clear that there are many related and duplicated storm types that can and should be further grouped.  This is accomplished by applying a series of regular expressions and updating a new "parentType" variable so that the data can be further grouped.
+
+
+```{r clean_storm_types, message=FALSE}
+# Add new variable to store parent type
+impact$parentType <- ""
+
+# Load the stringr library
+library(stringr)
+
+# Hurricanes and Typhoons
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('hurricane')))] <- "Hurricane/Typhoon"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('typhoon')))] <- "Hurricane/Typhoon"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('tropical storm')))] <- "Hurricane/Typhoon"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('coastal storm')))] <- "Hurricane/Typhoon"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('coastalstorm')))] <- "Hurricane/Typhoon"
+
+# Wind
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('wind')))] <- "Wind"
+
+# Cold
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('cold')))] <- "Cold"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('EXPOSURE')))] <- "Cold"
+
+
+# Flood
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('flood')))] <- "Flood"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('fld')))] <- "Flood"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('high water')))] <- "Flood"
+
+# Ice
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('ice')))] <- "Ice"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('icy')))] <- "Ice"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('frost')))] <- "Ice"
+
+# Rain/Snow
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('rain')))] <- "Rain/Snow"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('drizzle')))] <- "Rain/Snow"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('snow')))] <- "Rain/Snow"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('blizzard')))] <- "Rain/Snow"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('precip')))] <- "Rain/Snow"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('glaze')))] <- "Rain/Snow"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('spray')))] <- "Rain/Snow"
+
+# Fire
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('fire')))] <- "Fire"
+
+# Water Currents
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('current')))] <- "Currents/Tide/Surf"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('tide')))] <- "Currents/Tide/Surf"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('surf')))] <- "Currents/Tide/Surf"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('wave')))] <- "Currents/Tide/Surf"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('seas')))] <- "Currents/Tide/Surf"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('swells')))] <- "Currents/Tide/Surf"
+
+# Winter Storm
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('winter')))] <- "Winter Storm"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('wintry')))] <- "Winter Storm"
+
+# Avalanche/Land Slides
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('avalanche')))] <- "Avalanche/Landslides"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('landslide')))] <- "Avalanche/Landslides"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('mudslide')))] <- "Avalanche/Landslides"
+
+# Heat
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('heat')))] <- "Heat/Drought"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('drought')))] <- "Heat/Drought"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('warm')))] <- "Heat/Drought"
+
+
+# Dust
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('dust')))] <- "Dust"
+
+# Fog
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('fog')))] <- "Fog"
+
+# Hail
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('hail')))] <- "Hail"
+
+# Tornado
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('tornado')))] <- "Tornado"
+# Dust
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('funnel')))] <- "Tornado"
+
+# Lightning/Thunder
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('lightning')))] <- "Lightning/Thunder"
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('thunder')))] <- "Lightning/Thunder"
+
+# Tsunami
+impact$parentType[which(str_detect(impact$EVTYPE, ignore.case('tsunami')))] <- "Tsunami"
+
+# Fill in other for any remaining that are unclassified
+impact$parentType[which((impact$parentType==""))] <- "Other"
+
+```
+
+Exploring this new variable "parentType" we see now that storms have been group into 18 distinct categories.  This is a more manageable grouping around which to run our analysis.
+
+```{r view_storm_parenttypes}
+unique(impact$parentType)
+length(unique(impact$parentType))
+```
+
+
+### Processing data for insight on impact to population health
+
+Next steps are to target the variables that are specific to population health and storms.  These are FATALITIES and INJURIES.  We create a new dataset called "health" which stores only these variables.  We create a new variable to store the number of fatalities plus injuries per storm type.  We then calculate the average number of fatalities/injuries per storm type.
+
+
+```{r combined_health}
+# Select the health related variables and store in data.frame "health"
+health <- select(impact, parentType, FATALITIES, INJURIES)
+
+# Create new variable "totalIncidents"
+health$totalIncidents <- health$FATALITIES + health$INJURIES
+
+# Aggregate by parent storm type and sum the number of health incidents
+avgHealth <- summarize(group_by(health, parentType),mean(totalIncidents))
+
+# Add logical names to the columns
+names(avgHealth) <- c("eventType","averageIncidents")
+
+
+```
+
+We have, at this point, completed the processing necessary to answer the question: Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?  The answer will be provided in the results section.
+
+### Processing data for insight on economic consequences 
+
+We now move on to processing the dataset for observations that will give us insights on storm type and economic consequences. There are four fields which provide information about damages and storms: PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP.  The first step is to target these variables and store them in a new dataset called "economy".
+
+```{r damage_subset}
+# Select the economy related variables and store in data.frame "economy"
+economy <- select(impact, parentType, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP)
+
+```
+
+Damage costs are stored in the storm database to three significant digits with an indicator character that provides the multiplier to calculate the actual numerical value of the damages. The indicators which are present in our data subset stand for the following values: 
+-- blank = 1
+-- K = 1,000
+-- M = 1,000,000
+-- B = 1,000,000,000
+
+We create two new variables to store the actual numerical cost of property and crop damages.  We also create two new variables to store the numerical value of the multiplier, based on the indicator.  Once we have the multiplier value stored, we do a multiplication of the original variable (PROPDMG and CROPDMG) with the stored multipliers (propMult and cropMult) and store the final values in propValue and cropValue.
+
+```{r damages_calc, message=FALSE}
+# Create new empty variable for property damages and multiplier
+economy$propValue <- 0
+economy$propMult <- 0
+
+# Create new empty variable for crop damages and multiplier
+economy$cropValue <- 0
+economy$cropMult <- 0
+
+# Rearrange the columns
+economy <- select(economy, parentType, PROPDMG, PROPDMGEXP, propMult, propValue, CROPDMG, CROPDMGEXP, cropMult, cropValue)
+
+# Fill in property damage values for blank indictor - no multiplier
+economy$propMult[which(economy$PROPDMGEXP=="")] <- 1
+
+# Fill in property damage values for indictor K - 1000
+economy$propMult[which(economy$PROPDMGEXP=="K")] <- 1000
+
+# Fill in property damage values for indictor M - 1000000
+economy$propMult[which(economy$PROPDMGEXP=="M")] <- 1000000
+
+# Fill in property damage values for indictor B - 1000000000
+economy$propMult[which(economy$PROPDMGEXP=="B")] <- 1000000000
+
+# Fill in crop damage values for blank indictor - no multiplier
+economy$cropMult[which(economy$CROPDMGEXP=="")] <- 1
+
+# Fill in crop damage values for indictor K - 1000
+economy$cropMult[which(economy$CROPDMGEXP=="K")] <- 1000
+
+# Fill in crop damage values for indictor M - 1000000
+economy$cropMult[which(economy$CROPDMGEXP=="M")] <- 1000000
+
+# Fill in crop damage values for indictor B - 1000000000
+economy$cropMult[which(economy$CROPDMGEXP=="B")] <- 1000000000
+
+# Perform the calculations
+economy$propValue <- economy$propMult * economy$PROPDMG
+economy$cropValue <- economy$cropMult * economy$CROPDMG
+
+# Store total damage in new variable
+economy$totalDamage <- economy$propValue + economy$cropValue
+
+```
+
+Finally, we calculate the average cost of total damages (property and crops) per storm type.
+
+
+```{r combined_econ}
+
+# Aggregate by parent storm type and average the total cost of damage
+avgEcon <- summarize(group_by(economy, parentType),mean(totalDamage))
+names(avgEcon) <- c("eventType","averageDamage")
+
+```
+
+We have, at this point, completed the processing necessary to answer the question: Across the United States, which types of events have the greatest economic consequences?  The answer will be provided in the results section.
+
+
+
+## Results
+
+The results of our analysis are presented in the following graphs.
+
+### Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+
+
+```{r}
+# Load ggplot2
+library(ggplot2)
+
+# Graph the average number of health incidents per storm type
+qplot(eventType,averageIncidents,data=avgHealth)+theme(axis.text.x = element_text(angle = 90))+labs(title = "Average Health Incidents by Storm Type", x="Storm Type",y="Average Number of Incidents")+theme(axis.title.x=element_text(vjust=-10))
+```
+
+We have plotted along the x-axis each storm type, and the y-axis is showing the average number of health incidents (fatalities and injuries). As you can see from the figure above, our analysis shows that Tsunamis are the most harmful to population health. Second to Tsunamis is Heat/Drought.  
+
+### Across the United States, which types of events have the greatest economic consequences?
+
+```{r}
+# Graph the average total damage cost per storm
+qplot(eventType,averageDamage,data=avgEcon)+theme(axis.text.x = element_text(angle = 90))+labs(title = "Average Damages Cost by Storm Type", x="Storm Type",y="Average Damage Cost")+theme(axis.title.x=element_text(vjust=-10))
+```
+
+We have plotted along the x-axis each storm type and the y-axis is showing the average cost of damages.  As you can see from the figure above, our analysis shows that Hurricanes/Typhoons have the greatest economic consequences. 
+
+
+
+
+
+
+
+
+
+
